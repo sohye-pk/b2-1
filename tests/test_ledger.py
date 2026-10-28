@@ -1,7 +1,10 @@
 import contextlib
 import csv
 import io
+import os
 from pathlib import Path
+import subprocess
+import sys
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -195,6 +198,43 @@ class LedgerTests(unittest.TestCase):
                 with self.assertRaises(SystemExit) as exit:
                     main(command + ["--help"])
             self.assertEqual(exit.exception.code, 0)
+
+    def test_real_cli_interactive_restart_and_exit_codes(self):
+        base = [sys.executable, "-m", "budget_app", "--data-dir", str(self.repo.data_dir)]
+
+        def run(*args, input=None):
+            return subprocess.run(base + list(args), input=input, capture_output=True,
+                                  text=True, encoding="utf-8", env={
+                                      **os.environ, "PYTHONIOENCODING": "utf-8",
+                                  })
+
+        added = run("add", input="2026-10-02\nexpense\nfood\n15000\n점심\nmeal,work\n")
+        self.assertEqual(added.returncode, 0, added.stderr)
+        self.assertIn("id=", added.stdout)
+        listed = run("list")
+        self.assertEqual(listed.returncode, 0)
+        self.assertIn("15000", listed.stdout)
+        self.assertIn("점심", listed.stdout)
+        for arguments in (("delete", "--id", "missing"),
+                          ("import", "--from", str(self.directory / "missing.csv"))):
+            result = run(*arguments)
+            self.assertEqual(result.returncode, 1)
+            self.assertIn("[힌트]", result.stderr)
+            self.assertNotIn("Traceback", result.stderr)
+        result = run("unknown")
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("[힌트]", result.stderr)
+
+    def test_update_and_delete_replace_failure_preserve_original(self):
+        transaction = self.add()
+        original = self.repo.transactions_path.read_bytes()
+        for operation in (lambda: self.service.update(transaction.id, amount="123"),
+                          lambda: self.service.delete(transaction.id)):
+            with patch("budget_app.repository.os.replace", side_effect=OSError("blocked")):
+                with self.assertRaises(OSError):
+                    operation()
+            self.assertEqual(self.repo.transactions_path.read_bytes(), original)
+            self.assertEqual(list(self.repo.data_dir.glob(".ledger-*.tmp")), [])
 
 
 if __name__ == "__main__":

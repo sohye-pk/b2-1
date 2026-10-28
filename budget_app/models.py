@@ -32,7 +32,10 @@ def valid_month(value: str) -> str:
 def positive_int(value: str | int) -> int:
     if isinstance(value, bool) or not re.fullmatch(r"[0-9]+", str(value)):
         raise AppError("금액 또는 개수는 양수 정수여야 합니다.", "소수점 없이 1 이상의 정수를 입력하세요.")
-    result = int(value)
+    try:
+        result = int(value)
+    except ValueError as exc:
+        raise AppError("금액 또는 개수를 정수로 변환할 수 없습니다.", "너무 긴 숫자 대신 필요한 범위의 정수를 입력하세요.") from exc
     if result <= 0:
         raise AppError("금액 또는 개수는 0보다 커야 합니다.", "1 이상의 정수를 입력하세요.")
     return result
