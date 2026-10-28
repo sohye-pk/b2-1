@@ -1,5 +1,6 @@
 """파일 형식과 CLI에서 독립적인 가계부 처리 규칙."""
 
+from dataclasses import replace
 from itertools import islice
 from typing import Iterator
 from uuid import uuid4
@@ -49,3 +50,63 @@ class BudgetService:
     def list_transactions(self, limit: int = 10) -> Iterator[Transaction]:
         positive_int(limit)
         yield from islice(self.repository.iter_transactions(), limit)
+
+    def find(self, transaction_id: str) -> Transaction:
+        for transaction in self.repository.iter_transactions():
+            if transaction.id == transaction_id:
+                return transaction
+        raise AppError(f"없는 데이터: {transaction_id}", "list 또는 search로 거래 ID를 확인하세요.")
+
+    def update(
+        self, transaction_id: str, date: str | None = None, type: str | None = None,
+        category: str | None = None, amount: str | None = None,
+        memo: str | None = None, tags: str | None = None,
+    ) -> None:
+        if all(value is None for value in (date, type, category, amount, memo, tags)):
+            raise AppError("수정할 필드가 없습니다.", "--amount, --date 등 수정할 옵션을 지정하세요.")
+        current = self.find(transaction_id)
+        if category is not None:
+            self.require_category(category)
+        updated = replace(
+            current, date=valid_date(date) if date is not None else current.date,
+            type=valid_type(type) if type is not None else current.type,
+            category=category if category is not None else current.category,
+            amount=positive_int(amount) if amount is not None else current.amount,
+            memo=memo if memo is not None else current.memo,
+            tags=parse_tags(tags) if tags is not None else current.tags,
+        )
+        self.repository.merge_transactions([updated], remove_id=transaction_id)
+
+    def delete(self, transaction_id: str) -> None:
+        self.find(transaction_id)
+        self.repository.merge_transactions([], remove_id=transaction_id)
+
+    def search(
+        self, start: str | None = None, end: str | None = None,
+        category: str | None = None, type: str | None = None,
+        q: str | None = None, tag: str | None = None,
+    ) -> Iterator[Transaction]:
+        if start is not None:
+            valid_date(start)
+        if end is not None:
+            valid_date(end)
+        if start is not None and end is not None and start > end:
+            raise AppError("시작일이 종료일보다 늦습니다.", "--from을 --to 이전 날짜로 지정하세요.")
+        if category is not None:
+            self.require_category(category)
+        if type is not None:
+            valid_type(type)
+        for tx in self.repository.iter_transactions():
+            if start is not None and tx.date < start:
+                continue
+            if end is not None and tx.date > end:
+                continue
+            if category is not None and tx.category != category:
+                continue
+            if type is not None and tx.type != type:
+                continue
+            if q is not None and q not in tx.memo:
+                continue
+            if tag is not None and tag not in tx.tags:
+                continue
+            yield tx

@@ -72,6 +72,45 @@ class LedgerTests(unittest.TestCase):
             self.add()
         self.assertEqual(self.repo.transactions_path.read_text(encoding="utf-8"), '{broken}\n')
 
+    def test_update_reorders_and_delete_preserves_other_fields(self):
+        first = self.add("2026-10-01")
+        second = self.add("2026-10-02")
+        self.service.update(first.id, date="2026-10-03", amount="12000", memo="", tags="")
+        transactions = list(self.repo.iter_transactions())
+        self.assertEqual([tx.id for tx in transactions], [first.id, second.id])
+        self.assertEqual(transactions[0].amount, 12000)
+        self.assertEqual(transactions[0].memo, "")
+        self.assertEqual(transactions[0].tags, [])
+        self.assertEqual(transactions[0].category, "food")
+        self.service.delete(first.id)
+        self.assertEqual([tx.id for tx in self.repo.iter_transactions()], [second.id])
+        original = self.repo.transactions_path.read_bytes()
+        for operation in (lambda: self.service.update("missing", amount="1"),
+                          lambda: self.service.delete("missing"),
+                          lambda: self.service.update(second.id)):
+            with self.assertRaises(AppError):
+                operation()
+        self.assertEqual(self.repo.transactions_path.read_bytes(), original)
+
+    def test_search_combines_conditions_and_includes_endpoints(self):
+        first = self.add("2026-10-01")
+        second = self.add("2026-10-31")
+        self.add("2026-09-30")
+        self.add("2026-10-15", category="transport")
+        results = self.service.search("2026-10-01", "2026-10-31", "food", "expense", "점", "meal")
+        self.assertEqual([tx.id for tx in results], [second.id, first.id])
+        self.assertEqual(list(self.service.search(tag="mea")), [])
+        with self.assertRaises(AppError):
+            list(self.service.search("2026-10-31", "2026-10-01"))
+
+    def test_list_does_not_read_past_limit(self):
+        self.add()
+        with self.repo.transactions_path.open("a", encoding="utf-8") as output:
+            output.write("broken\n")
+        self.assertEqual(len(list(self.service.list_transactions(1))), 1)
+        with self.assertRaises(AppError):
+            list(self.service.search())
+
 
 if __name__ == "__main__":
     unittest.main()

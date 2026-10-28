@@ -2,7 +2,6 @@
 
 import argparse
 from pathlib import Path
-import sys
 from typing import Iterable
 
 from .decorators import handle_errors
@@ -23,6 +22,17 @@ def build_parser() -> Parser:
     commands.add_parser("add", help="대화형 거래 추가")
     listing = commands.add_parser("list", help="최신순 거래 목록")
     listing.add_argument("--limit", default="10", help="출력 건수 (기본 10)")
+    update = commands.add_parser("update", help="옵션으로 지정한 거래 필드 수정")
+    update.add_argument("--id", required=True)
+    for field in ("date", "type", "category", "amount", "memo", "tags"):
+        update.add_argument(f"--{field}")
+    delete = commands.add_parser("delete", help="ID로 거래 삭제")
+    delete.add_argument("--id", required=True)
+    search = commands.add_parser("search", help="모든 지정 조건을 만족하는 거래 검색")
+    search.add_argument("--from", dest="start")
+    search.add_argument("--to", dest="end")
+    for field in ("category", "type", "q", "tag"):
+        search.add_argument(f"--{field}")
     category = commands.add_parser("category", help="카테고리 관리")
     actions = category.add_subparsers(dest="action", required=True)
     for action in ("add", "list", "remove"):
@@ -54,6 +64,14 @@ def main(argv: list[str] | None = None) -> int:
         print(f"[저장 완료] id={transaction.id}")
     elif args.command == "list":
         print_transactions(service.list_transactions(positive_int(args.limit)))
+    elif args.command == "update":
+        service.update(args.id, args.date, args.type, args.category, args.amount, args.memo, args.tags)
+        print(f"[수정 완료] id={args.id}")
+    elif args.command == "delete":
+        service.delete(args.id)
+        print(f"[삭제 완료] id={args.id}")
+    elif args.command == "search":
+        print_transactions(service.search(args.start, args.end, args.category, args.type, args.q, args.tag))
     elif args.command == "category":
         if args.action == "list":
             for name in repository.categories():
