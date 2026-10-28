@@ -5,7 +5,7 @@ from itertools import islice
 from typing import Iterator
 from uuid import uuid4
 
-from .models import AppError, Transaction, parse_tags, positive_int, valid_date, valid_type
+from .models import AppError, MonthSummary, Transaction, parse_tags, positive_int, valid_date, valid_month, valid_type
 from .repository import TransactionRepository
 
 
@@ -110,3 +110,27 @@ class BudgetService:
             if tag is not None and tag not in tx.tags:
                 continue
             yield tx
+
+    def set_budget(self, month: str, amount: str | int) -> None:
+        valid_month(month)
+        value = positive_int(amount)
+        budgets = self.repository.budgets()
+        budgets[month] = value
+        self.repository.save_budgets(budgets)
+
+    def summary(self, month: str, top: int = 3) -> MonthSummary:
+        valid_month(month)
+        positive_int(top)
+        income = expense = count = 0
+        categories: dict[str, int] = {}
+        for tx in self.repository.iter_transactions():
+            if not tx.date.startswith(month + "-"):
+                continue
+            count += 1
+            if tx.type == "income":
+                income += tx.amount
+            else:
+                expense += tx.amount
+                categories[tx.category] = categories.get(tx.category, 0) + tx.amount
+        ranking = sorted(categories.items(), key=lambda item: (-item[1], item[0]))[:top]
+        return MonthSummary(income, expense, count, ranking, self.repository.budgets().get(month))

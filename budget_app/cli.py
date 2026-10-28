@@ -33,6 +33,14 @@ def build_parser() -> Parser:
     search.add_argument("--to", dest="end")
     for field in ("category", "type", "q", "tag"):
         search.add_argument(f"--{field}")
+    summary = commands.add_parser("summary", help="월별 요약과 예산 조회")
+    summary.add_argument("--month", required=True)
+    summary.add_argument("--top", default="3")
+    budget = commands.add_parser("budget", help="월 예산 설정 (조회는 summary)")
+    budget_actions = budget.add_subparsers(dest="action", required=True)
+    setting = budget_actions.add_parser("set", help="월 예산 저장")
+    setting.add_argument("--month", required=True)
+    setting.add_argument("--amount", required=True)
     category = commands.add_parser("category", help="카테고리 관리")
     actions = category.add_subparsers(dest="action", required=True)
     for action in ("add", "list", "remove"):
@@ -72,6 +80,21 @@ def main(argv: list[str] | None = None) -> int:
         print(f"[삭제 완료] id={args.id}")
     elif args.command == "search":
         print_transactions(service.search(args.start, args.end, args.category, args.type, args.q, args.tag))
+    elif args.command == "budget":
+        service.set_budget(args.month, args.amount)
+        print(f"[저장 완료] {args.month} 예산 {args.amount}원")
+    elif args.command == "summary":
+        result = service.summary(args.month, positive_int(args.top))
+        if result.count == 0:
+            print("데이터 없음")
+        print(f"총 수입: {result.income}원\n총 지출: {result.expense}원\n잔액: {result.balance}원")
+        if result.budget is not None:
+            print(f"예산: {result.budget}원 (사용률 {result.expense / result.budget:.1%})")
+            if result.expense > result.budget:
+                print("[경고] 예산 초과")
+        print(f"지출 TOP {args.top}")
+        for index, (category, amount) in enumerate(result.top_categories, 1):
+            print(f"{index}) {category} {amount}원")
     elif args.command == "category":
         if args.action == "list":
             for name in repository.categories():

@@ -111,6 +111,29 @@ class LedgerTests(unittest.TestCase):
         with self.assertRaises(AppError):
             list(self.service.search())
 
+    def test_summary_budget_persistence_and_warning(self):
+        self.add(amount=100000, category="salary", type="income")
+        self.add(amount=12000)
+        self.add(amount=8000)
+        self.add(amount=5000, category="transport")
+        self.add("2026-09-30", amount=99999)
+        self.service.set_budget("2026-10", 20000)
+        reopened = BudgetService(TransactionRepository(self.repo.data_dir))
+        result = reopened.summary("2026-10", 1)
+        self.assertEqual((result.income, result.expense, result.balance), (100000, 25000, 75000))
+        self.assertEqual(result.top_categories, [("food", 20000)])
+        self.assertEqual(result.budget, 20000)
+        self.assertEqual(reopened.summary("2026-08").count, 0)
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            code = main(["--data-dir", str(self.repo.data_dir), "summary", "--month", "2026-10"])
+        self.assertEqual(code, 0)
+        self.assertIn("125.0%", output.getvalue())
+        self.assertIn("예산 초과", output.getvalue())
+        for month, amount in (("2026-13", 1), ("2026-1", 1), ("2026-10", 0)):
+            with self.assertRaises(AppError):
+                self.service.set_budget(month, amount)
+
 
 if __name__ == "__main__":
     unittest.main()

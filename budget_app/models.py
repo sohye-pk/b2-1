@@ -80,3 +80,16 @@ class Transaction:
     @classmethod
     def from_record(cls, record: dict[str, Any]) -> "Transaction":
         return cls(**record)
+
+
+@dataclass(frozen=True)
+class MonthSummary:
+    income: int
+    expense: int
+    count: int
+    top_categories: list[tuple[str, int]]
+    budget: int | None
+
+    @property
+    def balance(self) -> int:
+        return self.income - self.expense
