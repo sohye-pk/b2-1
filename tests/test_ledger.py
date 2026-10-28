@@ -1,4 +1,5 @@
 import contextlib
+import csv
 import io
 from pathlib import Path
 import tempfile
@@ -133,6 +134,67 @@ class LedgerTests(unittest.TestCase):
         for month, amount in (("2026-13", 1), ("2026-1", 1), ("2026-10", 0)):
             with self.assertRaises(AppError):
                 self.service.set_budget(month, amount)
+
+    def test_csv_round_trip_filter_and_unicode_tags(self):
+        self.add("2026-10-03")
+        self.add("2026-09-30")
+        self.service.add("2026-10-01", "expense", "food", 123, '식사, "친구"', "meal,work")
+        output = self.directory / "export.csv"
+        self.assertEqual(self.service.export_csv(output, month="2026-10"), 2)
+        with output.open(encoding="utf-8", newline="") as source:
+            rows = list(csv.DictReader(source))
+        self.assertEqual(rows[1]["memo"], '식사, "친구"')
+        self.assertEqual(rows[1]["tags"], "meal,work")
+        other = BudgetService(TransactionRepository(self.directory / "other"))
+        self.assertEqual(other.import_csv(output), 2)
+        imported = list(other.repository.iter_transactions())
+        self.assertEqual(imported[1].tags, ["meal", "work"])
+        self.assertEqual(imported[1].memo, '식사, "친구"')
+        self.assertNotEqual(imported[1].id, list(self.repo.iter_transactions())[1].id)
+        self.assertEqual(self.service.export_csv(output, start="2026-10-03", end="2026-10-03"), 1)
+
+    def test_invalid_csv_rolls_back_entire_import(self):
+        self.add()
+        original = self.repo.transactions_path.read_bytes()
+        source = self.directory / "bad.csv"
+        header = "date,type,category,amount\n"
+        good = "2026-10-03,expense,food,10\n"
+        for bad in ("2026-10-03,expense,food,0\n", "2026-10-03,expense,unknown,10\n",
+                    "2026-02-30,expense,food,10\n", "2026-10-03,expense,food,10,extra\n",
+                    '2026-10-03,expense,food,"10\n'):
+            source.write_text(header + good + bad, encoding="utf-8")
+            with self.subTest(bad=bad), self.assertRaises(AppError) as error:
+                self.service.import_csv(source)
+            self.assertIn("행", str(error.exception))
+            self.assertEqual(self.repo.transactions_path.read_bytes(), original)
+        source.write_text("date,amount\n2026-10-01,10\n", encoding="utf-8")
+        with self.assertRaises(AppError):
+            self.service.import_csv(source)
+
+    def test_export_guards_and_original_output_preserved(self):
+        self.add()
+        output = self.directory / "export.csv"
+        output.write_text("original", encoding="utf-8")
+        for options in ({}, {"start": "2026-10-01"},
+                        {"month": "2026-10", "start": "2026-10-01"},
+                        {"start": "2026-10-31", "end": "2026-10-01"}):
+            with self.subTest(options=options), self.assertRaises(AppError):
+                self.service.export_csv(output, **options)
+            self.assertEqual(output.read_text(encoding="utf-8"), "original")
+        original = self.repo.transactions_path.read_bytes()
+        with self.assertRaises(AppError):
+            self.service.export_csv(self.repo.transactions_path, month="2026-10")
+        self.assertEqual(self.repo.transactions_path.read_bytes(), original)
+
+    def test_help_for_all_commands(self):
+        for command in ([], ["add"], ["list"], ["search"], ["update"], ["delete"],
+                        ["summary"], ["budget"], ["budget", "set"], ["category"],
+                        ["category", "add"], ["category", "list"], ["category", "remove"],
+                        ["import"], ["export"]):
+            with self.subTest(command=command), contextlib.redirect_stdout(io.StringIO()):
+                with self.assertRaises(SystemExit) as exit:
+                    main(command + ["--help"])
+            self.assertEqual(exit.exception.code, 0)
 
 
 if __name__ == "__main__":

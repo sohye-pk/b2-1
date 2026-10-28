@@ -1,12 +1,16 @@
 """파일 형식과 CLI에서 독립적인 가계부 처리 규칙."""
 
 from dataclasses import replace
+import csv
 from itertools import islice
+from pathlib import Path
 from typing import Iterator
 from uuid import uuid4
 
 from .models import AppError, MonthSummary, Transaction, parse_tags, positive_int, valid_date, valid_month, valid_type
-from .repository import TransactionRepository
+from .repository import TransactionRepository, atomic_output
+
+CSV_COLUMNS = ("date", "type", "category", "amount", "memo", "tags")
 
 
 class BudgetService:
@@ -134,3 +138,63 @@ class BudgetService:
                 categories[tx.category] = categories.get(tx.category, 0) + tx.amount
         ranking = sorted(categories.items(), key=lambda item: (-item[1], item[0]))[:top]
         return MonthSummary(income, expense, count, ranking, self.repository.budgets().get(month))
+
+    def import_csv(self, path: Path) -> int:
+        transactions: list[Transaction] = []
+        with path.open(encoding="utf-8-sig", newline="") as source:
+            reader = csv.DictReader(source, strict=True)
+            try:
+                header = reader.fieldnames
+                if (header is None or len(header) != len(set(header))
+                        or not set(CSV_COLUMNS[:4]).issubset(header)
+                        or not set(header).issubset(CSV_COLUMNS)):
+                    raise AppError("CSV 헤더가 올바르지 않습니다.", "필수 컬럼 date,type,category,amount와 선택 컬럼 memo,tags를 확인하세요.")
+                for row in reader:
+                    try:
+                        if None in row or any(value is None for value in row.values()):
+                            raise AppError("CSV 컬럼 개수가 헤더와 다릅니다.", "쉼표가 포함된 필드는 큰따옴표로 감싸세요.")
+                        transactions.append(self.make_transaction(
+                            row["date"], row["type"], row["category"], row["amount"],
+                            row.get("memo", ""), row.get("tags", ""),
+                        ))
+                    except AppError as exc:
+                        raise AppError(
+                            f"CSV {reader.line_num}행: {exc} (전체 가져오기 취소)", exc.hint,
+                        ) from exc
+            except csv.Error as exc:
+                raise AppError(
+                    f"CSV {reader.line_num}행 구문 오류: {exc} (전체 가져오기 취소)",
+                    "따옴표와 쉼표 구분 형식을 확인하세요.",
+                ) from exc
+        transactions.sort(key=lambda tx: tx.sort_key, reverse=True)
+        if transactions:
+            self.repository.merge_transactions(transactions)
+        return len(transactions)
+
+    def export_csv(
+        self, path: Path, month: str | None = None,
+        start: str | None = None, end: str | None = None,
+    ) -> int:
+        if month is not None:
+            valid_month(month)
+            if start is not None or end is not None:
+                raise AppError("내보내기 기간 조건이 중복되었습니다.", "--month 또는 --from/--to 쌍 중 하나만 사용하세요.")
+        elif start is None or end is None:
+            raise AppError("내보내기 기간이 필요합니다.", "--month 또는 --from과 --to를 함께 지정하세요.")
+        if path.resolve() in {item.resolve() for item in self.repository.storage_paths}:
+            raise AppError("저장소 파일로 내보낼 수 없습니다.", "별도의 CSV 출력 경로를 지정하세요.")
+        if path.exists() and any(path.samefile(item) for item in self.repository.storage_paths):
+            raise AppError("출력 파일이 저장소 파일과 같습니다.", "별도의 CSV 출력 경로를 지정하세요.")
+        count = 0
+        with atomic_output(path) as output:
+            writer = csv.DictWriter(output, fieldnames=CSV_COLUMNS)
+            writer.writeheader()
+            for tx in self.search(start, end):
+                if month is not None and not tx.date.startswith(month + "-"):
+                    continue
+                writer.writerow({
+                    "date": tx.date, "type": tx.type, "category": tx.category,
+                    "amount": tx.amount, "memo": tx.memo, "tags": ",".join(tx.tags),
+                })
+                count += 1
+        return count

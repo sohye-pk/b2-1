@@ -41,6 +41,13 @@ def build_parser() -> Parser:
     setting = budget_actions.add_parser("set", help="월 예산 저장")
     setting.add_argument("--month", required=True)
     setting.add_argument("--amount", required=True)
+    importing = commands.add_parser("import", help="CSV 전체 검증 후 거래 가져오기")
+    importing.add_argument("--from", dest="source", type=Path, required=True)
+    exporting = commands.add_parser("export", help="지정 기간 거래를 CSV로 내보내기")
+    exporting.add_argument("--out", type=Path, required=True)
+    exporting.add_argument("--month")
+    exporting.add_argument("--from", dest="start")
+    exporting.add_argument("--to", dest="end")
     category = commands.add_parser("category", help="카테고리 관리")
     actions = category.add_subparsers(dest="action", required=True)
     for action in ("add", "list", "remove"):
@@ -83,6 +90,12 @@ def main(argv: list[str] | None = None) -> int:
     elif args.command == "budget":
         service.set_budget(args.month, args.amount)
         print(f"[저장 완료] {args.month} 예산 {args.amount}원")
+    elif args.command == "import":
+        count = service.import_csv(args.source)
+        print(f"[완료] imported={count}")
+    elif args.command == "export":
+        count = service.export_csv(args.out, args.month, args.start, args.end)
+        print(f"[완료] {args.out} ({count} records)")
     elif args.command == "summary":
         result = service.summary(args.month, positive_int(args.top))
         if result.count == 0:
